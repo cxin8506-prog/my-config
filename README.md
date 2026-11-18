@@ -1,3 +1,3 @@
 # my-config
 
-Personal configuration backup.
+Personal backup.
