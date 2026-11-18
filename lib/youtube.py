@@ -1,0 +1,763 @@
+import re
+import json
+import time
+import base64
+import requests
+import datetime
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import quote, urljoin
+from base.spider import Spider as BaseSpider
+
+# ============================================================
+# 📺 OKTVBox YouTube 直播与点播源 Python 爬虫 (全量显式旗舰完美修复版)
+# ============================================================
+
+# 1. 首页 EPG 地址配置
+HEADER_EPG = "https://gitee.com/gsls200808/xmltvepg/raw/master/e9.xml.gz"
+
+# 2. 首页宣传视频源地址
+HEADER_PROMO_1_URL = ""
+HEADER_PROMO_2_URL = ""
+
+# 3. 首页背景图与宣传LOGO/播放器台标
+HEADER_PROMO_BG = ""
+PROMO_LOGO_PIC = ""
+TV_LOGO_WATERMARK = ""
+
+# ============================================================
+# ⚙️ 功能开关配置：S5 代理总开关 (True 为开启，False 为完全关闭)
+# ============================================================
+USE_SOCKS5 = False
+
+# ============================================================
+# 📺 YouTube 频道独立配置字典（显式展开）
+# ============================================================
+CHANNEL_LOGOS = {
+    "promo_1": PROMO_LOGO_PIC,  
+    "promo_2": PROMO_LOGO_PIC,
+    "Jxk39FR22so": "",
+    "vYRfQo6JMxc": "",
+    "gCNeDWCI0vo": "",
+    "LuKwFajn37U": "",
+    "Ry--eMIjYLQ": "",
+    "SIYoSJ-KvHQ": "",
+    "ouGgxvUNhok": "",
+    "PUqkUzXEtuI": "",
+    "wKolkRh5-_k": "",
+    "DP8Esat08rs": "",
+    "N9FnqYgXuHo": "",
+    "EOJQdKv-dIs": "",
+    "GybSrkCk0wo": "",
+    "wIicpuUDgv4": "",
+    "YyOrp1NBkDM": "",
+    "m_dhMSvUCIc": "",
+    "o_-hSMgpAzs": "",
+    "2mCSYvcfhtc": "",
+    "kMwoV2js-B4": "",
+    "E0zhe2gkXBs": "",
+    "V1p33hqPrUk": "",
+    "1I2iq41Akmo": "",
+    "vr3XyVCR4T0": "",
+    "hg4nYb3jE9A": "",
+    "jD79P0pWBc4": "",
+    "ylYJSBUgaMA": "",
+    "yeYC0mbSIOo": "",
+    "6IquAgfvYmc": "",
+    "w87VGpgd90U": "",
+    "yAUQQ0DhPxI": "",
+    "5n0y6b0Q25o": "",
+    "xLqt2p6Dowo": "",
+    "UgOi92IvONg": "",
+    "HEYnMz9zGhY": "",
+    "NyrdWXddfR4": "",
+    "K2qsju6byIg": "",
+    "OhA_G0s9pqw": "",
+    "6ZowCmLBcMY": "",
+    "FS7IPxmfEms": "",
+    "epaQ9FmRooc": "",
+    "hWWFQd9aMvc": "",
+    "eHkFgEVwefI": "",
+    "XWQTHTOj6VU": "",
+    "Y_OIcysppaA": "",
+    "KSIwUaDOl3A": "",
+    "xJv_2lF1eb4": "",
+    "jgUdjPLf2tY": "",
+    "xCHeilSLxHU": "",
+    "aAZ3-OZb5K4": "",
+    "gahE0BDf_uc": "",
+    "8TBKZE3rd1Y": "",
+    "Bn7GsaDY614": "",
+    "9m-_A7ubjLQ": "",
+    "Oc51BmM0dq0": "",
+    "E3XJOvJMXBY": "",
+}
+
+# ============================================================
+# 📺 YouTube 频道分类配置（全量显式展开所有大类与明细）
+# ============================================================
+CHANNEL_GROUPS = {
+    "国际新闻": [
+        ("Jxk39FR22so", "CGTN LIVE"),
+        ("vYRfQo6JMxc", "United Nations联合国"),
+        ("gCNeDWCI0vo", "Al Jazeera English"),
+        ("LuKwFajn37U", "DW News"),
+        ("Ry--eMIjYLQ", "凤凰卫视"),
+    ],
+    "儿歌/音乐": [
+        ("SIYoSJ-KvHQ", "YOASOBI - STATION"),
+        ("ouGgxvUNhok", "432Hz + 963Hz + 528Hz 深层疗愈"),
+        ("PUqkUzXEtuI", "黃明志千萬點閱神曲精選"),
+        ("wKolkRh5-_k", "古风歌曲合集"),
+        ("DP8Esat08rs", "金庸武俠大戲"),
+        ("N9FnqYgXuHo", "戲腔集合"),
+        ("EOJQdKv-dIs", "【五音療癒】百病生於氣，止於音｜宮商角徵羽・疏肝解鬱・清心安神・健脾祛濕・舒緩焦慮內耗｜Chinese Zen Music・癒し音楽"),
+        ("GybSrkCk0wo", "GREGORIAN TECHNO III"),
+    ],
+    "台湾新闻/财经/宗教": [
+        ("wIicpuUDgv4", "正德电视台"),
+        ("YyOrp1NBkDM", "生命电视台"),
+        ("m_dhMSvUCIc", "TVBS NEWS"),
+        ("o_-hSMgpAzs", "TVBS NEWS1"),
+        ("2mCSYvcfhtc", "TVBS 新闻HD"),
+        ("kMwoV2js-B4", "三立财经"),
+        ("E0zhe2gkXBs", "东森LIVE"),
+        ("V1p33hqPrUk", "东森新闻"),
+        ("1I2iq41Akmo", "东森财经"),
+        ("vr3XyVCR4T0", "中天新闻"),
+        ("hg4nYb3jE9A", "公视新闻"),
+        ("jD79P0pWBc4", "台视新闻"),
+        ("ylYJSBUgaMA", "民视新闻"),
+        ("yeYC0mbSIOo", "三立新闻网"),
+        ("6IquAgfvYmc", "环宇新闻"),
+        ("w87VGpgd90U", "环宇新闻台湾台"),
+        ("yAUQQ0DhPxI", "环宇财经"),
+        ("5n0y6b0Q25o", "镜新闻"),
+        ("xLqt2p6Dowo", "非凡财经"),
+    ],
+    "电视剧": [
+        ("UgOi92IvONg", "86版 西游记"),
+        ("HEYnMz9zGhY", "楊麗花歌仔戲24小時不無聊直播"),
+    ],
+    "台湾电视剧/综艺": [
+        ("NyrdWXddfR4", "台湾奇案"),
+        ("K2qsju6byIg", "藍色水玲瓏"),
+        ("OhA_G0s9pqw", "現代嘉慶君"),
+        ("6ZowCmLBcMY", "台灣靈異事件"),
+    ],
+    "科技分享": [
+        ("FS7IPxmfEms", "不良林"),
+        ("epaQ9FmRooc", "jc-nf那坨"),
+        ("hWWFQd9aMvc", "爱分享的小企鹅"),
+    ],
+    "宗教/佛经": [
+        ("eHkFgEVwefI", "華藏衛視"),
+        ("XWQTHTOj6VU", "悟道法師講經直播台"),
+        ("Y_OIcysppaA", "大悲咒"),
+        ("KSIwUaDOl3A", "心经 The Heart Sutra"),
+        ("xJv_2lF1eb4", "地藏菩薩本願經"),
+        ("jgUdjPLf2tY", "地藏王菩薩心咒"),
+        ("xCHeilSLxHU", "綠度母心咒 108遍"),
+        ("aAZ3-OZb5K4", "《安土地真言108遍"),
+        ("gahE0BDf_uc", "金剛薩埵百字明咒21遍"),
+        ("8TBKZE3rd1Y", "九天應元雷聲普化天尊"),
+        ("Bn7GsaDY614", "《八大神咒》孟圆辉"),
+        ("9m-_A7ubjLQ", "妙觉 24/7 佛曲电台"),
+        ("Oc51BmM0dq0", "齊豫 清淨心靈 經典佛曲"),
+        ("E3XJOvJMXBY", "12部经典佛经咒语净心合集"),
+    ],
+}
+
+# ============================================================
+# 🌐 YouTube 代理配置（全量显式展开 SOCKS5 与所有备用代理）
+# ============================================================
+SOCKS5_PROXIES = [
+    "socks5://u8628475611:3e6nK5ESpJmSZ5sK@45.192.242.201:8888", 
+    "socks5://tvbox:a7dfcfd0372536bd@145.239.65.119:20137",      
+]
+
+PRIMARY_PROXIES = [
+    "https://119.28.24.235:3128",       # 香港_1
+    "https://103.86.116.118:443",       # 印度尼西亚_1
+    "https://118.184.140.90:58764",     # 美国_42
+    "https://138.199.35.206:9002",      # 美国_3
+    "https://138.199.35.219:9002",      # 美国_13
+    "https://fan.240104.xyz:443",       # HK香港
+    "https://fan.226278.xyz:443",       # US美国
+    "https://103.86.117.202:443",       # 印尼
+    "https://150552-nat-jk.barokah.net.id:443",  # 印尼
+    "https://96.5.129.85:443",          # us美国
+    "https://87.106.223.158:443",       # NL荷兰
+    "https://103.97.88.154:443",        # NL荷兰2
+]
+
+BACKUP_PROXIES = [
+    "https://146.70.244.18:443",       # 奥地利_1
+    "https://31.171.155.210:9443",     # 阿尔巴尼亚_1
+    "https://31.171.154.66:443",       # 阿尔巴尼亚_2
+    "https://18.200.158.139:443",     # 爱尔兰_1
+    "https://149.88.96.12:9443",       # 爱尔兰_2
+    "https://146.70.123.98:443",      # 比利时_1
+    "https://37.120.156.18:443",      # 波兰_1
+    "https://151.115.54.133:443",    # 波兰_2
+    "https://151.115.54.133:443",    # 波兰_3
+    "https://151.115.54.133:443",    # 波兰_4
+    "https://37.120.213.210:9443",   # 瑞士_1
+    "https://149.88.27.33:9443",     # 瑞士_2
+    "https://149.36.50.129:443",     # 德国_1
+    "https://149.36.50.157:443",     # 德国_2
+    "https://87.106.223.158:443",    # 德国_3
+    "https://158.173.154.3:9002",    # 德国_4
+    "https://158.173.154.5:9002",    # 德国_5
+    "https://158.173.154.4:9002",    # 德国_6
+    "https://193.233.75.115:443",    # 德国_7
+    "https://79.127.156.177:9443",   # 德国_8
+    "https://158.173.154.2:9002",    # 德国_9
+    "https://159.69.94.125:443",     # 德国_10
+    "https://193.233.75.115:443",    # 德国_11
+    "https://46.29.166.134:1446",    # 俄罗斯_1
+    "https://82.65.162.76:443",      # 法国_1
+    "https://87.98.174.157:6103",    # 法国_2
+    "https://80.124.109.22:8090",    # 法国_3
+    "https://213.139.9.142:9443",    # 法国_4
+    "https://83.206.1.225:8090",     # 法国_5
+    "https://87.98.174.157:6103",    # 法国_6
+    "https://51.158.243.91:443",    # 荷兰_1
+    "https://84.17.47.125:9002",    # 荷兰_2
+    "https://84.17.47.147:9002",    # 荷兰_3
+    "https://84.17.47.146:9002",    # 荷兰_4
+    "https://103.97.88.154:443",    # 荷兰_5
+    "https://84.17.47.149:9002",    # 荷兰_7
+    "https://51.158.243.91:443",    # 荷兰_8
+    "https://84.17.47.146:9002",    # 荷兰_9
+    "https://84.17.47.146:9002",    # 荷兰_10
+    "https://84.17.47.149:9002",    # 荷兰_11x
+    "https://149.36.51.129:443",    # 荷兰_12
+    "https://84.17.47.150:9002",    # 荷兰_13
+    "https://84.17.47.147:9002",    # 荷兰_14
+    "https://84.17.47.148:9002",    # 荷兰_15
+    "https://5.255.118.82:443",     # 荷兰_16
+    "https://51.159.225.197:19362", # 荷兰_18
+    "https://84.17.47.124:9002",    # 荷兰_19
+    "https://149.36.51.157:9443",   # 荷兰_20
+    "https://84.17.47.123:9002",    # 荷兰_21
+    "https://89.150.35.94:443",     # 荷兰_22
+    "https://185.53.129.141:9090",  # 荷兰_23
+    "https://185.140.209.235:443",  # 荷兰_25
+    "https://185.216.35.130:443",   # 捷克_1
+    "https://154.47.29.174:443",    # 克罗地亚_1
+    "https://154.47.29.161:443",    # 克罗地亚_2
+    "https://109.248.147.66:443",   # 拉脱维亚_1
+    "https://185.219.159.16:443",   # 拉脱维亚_2
+    "https://185.221.132.242:443",  # 卢森堡_1
+    "https://185.221.132.226:443",  # 卢森堡_2
+    "https://193.176.84.31:9002",   # 罗马尼亚_1
+    "https://193.176.84.26:9002",   # 罗马尼亚_2
+    "https://193.176.84.32:9002",   # 罗马尼亚_3
+    "https://193.176.84.38:9002",   # 罗马尼亚_4
+    "https://193.176.84.38:9002",   # 罗马尼亚_5
+    "https://193.176.84.16:9002",   # 罗马尼亚_6
+    "https://193.176.84.33:9002",   # 罗马尼亚_7
+    "https://193.176.84.24:9002",   # 罗马尼亚_8
+    "https://185.163.110.194:443",  # 罗马尼亚_9
+    "https://193.176.84.18:9002",   # 罗马尼亚_10
+    "https://193.176.84.22:9002",   # 罗马尼亚_11
+    "https://193.176.84.39:9002",   # 罗马尼亚_12
+    "https://193.176.84.17:9002",   # 罗马尼亚_13
+    "https://193.176.84.31:9002",   # 罗马尼亚_14
+    "https://193.176.84.21:9002",   # 罗马尼亚_15
+    "https://146.70.221.34:443",    # 塞尔维亚_1
+    "https://146.70.221.18:443",    # 塞尔维亚_2
+    "https://146.70.242.146:443",  # 瑞典_1
+    "https://185.245.84.50:9443",   # 丹麦_1
+    "https://138.199.35.211:9002",  # 美国_1
+    "https://138.199.35.200:9002",  # 美国_2
+    "https://138.199.35.206:9002",  # 美国_3
+    "https://138.199.35.203:9002",  # 美国_4
+    "https://138.199.35.195:9002",  # 美国_5
+    "https://138.199.35.195:9002",  # 美国_6
+    "https://138.199.35.207:9002",  # 美国_7
+    "https://138.199.35.201:9002",  # 美国_8
+    "https://138.199.35.210:9002",  # 美国_9
+    "https://voteshirleysew.club:443", # 美国_10
+    "https://138.199.35.216:9002",  # 美国_11
+    "https://138.199.35.206:9002",  # 美国_12
+    "https://138.199.35.219:9002",  # 美国_13
+    "https://138.199.35.219:9002",  # 美国_14
+    "https://138.199.35.198:9002",  # 美国_15
+    "https://138.199.35.212:9002",  # 美国_16
+    "https://149.34.248.65:443",    # 美国_17
+    "https://138.199.35.202:9002",  # 美国_18
+    "https://44.217.145.28:8443",   # 美国_19
+    "https://129.153.93.183:443",   # 美国_21
+    "https://44.248.167.117:8443",  # 美国_22
+    "https://167.88.60.242:443",    # 美国_23
+    "https://154.47.25.78:9443",    # 美国_24
+    "https://68.235.56.59:443",     # 美国_25
+    "https://44.217.145.28:8443",   # 美国_26
+    "https://12.202.180.10:443",    # 美国_27
+    "https://23.133.176.14:443",    # 美国_28
+    "https://12.221.146.147:443",  # 美国_29
+    "https://18.206.28.143:8443",   # 美国_30
+    "https://162.244.227.36:443",  # 美国_31
+    "https://38.247.141.135:443",  # 美国_33
+    "https://173.42.49.102:8090",  # 美国_34
+    "https://44.248.167.117:8443", # 美国_35
+    "https://138.199.35.209:9002", # 美国_36
+    "https://138.199.35.217:9002", # 美国_37
+    "https://138.199.35.204:9002", # 美国_38
+    "https://138.199.35.202:9002", # 美国_39
+    "https://138.199.35.203:9002", # 美国_40
+    "https://138.199.35.207:9002", # 美国_41
+    "https://118.184.140.90:58764",# 美国_42
+    "https://138.199.35.216:9002", # 美国_43
+    "https://130.195.250.34:443",  # 西班牙_1
+    "https://82.102.17.178:443",   # 西班牙_2
+    "https://130.195.250.18:443",  # 西班牙_3
+    "https://119.28.24.235:3128",  # 香港_1
+    "https://120.232.204.58:31343",# 香港_2
+    "https://154.26.139.24:443",   # 新加坡_1
+    "https://23.169.224.34:9443",  # 加拿大_1
+    "https://206.223.183.16:443",  # 加拿大_2
+    "https://134.65.17.77:443",    # 巴西_1
+    "https://120.232.204.58:40583",# 日本_1
+    "https://149.22.85.78:443",    # 希腊_1
+    "https://103.86.116.118:443",  # 印度尼西亚_1
+    "https://212.102.63.61:443",   # 英国_1
+    "https://84.17.50.193:443",    # 英国_2
+    "https://212.102.63.31:443",   # 英国_3
+    "https://185.164.138.156:443", # 英国_4
+    "https://149.22.86.14:443",    # 葡萄牙_1
+    "https://185.183.105.130:443", # 意大利_1
+    "https://93.42.177.250:443",   # 意大利_2
+    "https://95.229.15.89:443",    # 意大利_3
+    "https://109.248.149.34:443",  # 其他_1
+]
+
+def get_base_proxy_candidates():
+    seen = set()
+    candidates = []
+    active_s5 = SOCKS5_PROXIES if USE_SOCKS5 else []
+    for p in active_s5 + PRIMARY_PROXIES + BACKUP_PROXIES:
+        if p and p not in seen:
+            seen.add(p)
+            candidates.append(p)
+    return candidates
+
+DEBUG_LOG = '/sdcard/Download/ytb_live_debug.log'
+
+def debug_log(message, data=None):
+    if not DEBUG_LOG:
+        return
+    try:
+        line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}"
+        if data is not None:
+            if isinstance(data, (dict, list)):
+                line += ' ' + json.dumps(data, ensure_ascii=False, default=str)
+            else:
+                line += ' ' + str(data)
+        with open(DEBUG_LOG, 'a', encoding='utf-8') as f:
+            f.write(line + '\n')
+    except Exception:
+        pass
+
+def get_proxies_dict(proxy):
+    if not proxy:
+        return None
+    return {'http': proxy, 'https': proxy}
+
+class Spider(BaseSpider):
+    def getName(self):
+        return 'YouTube直播点播'
+
+    def init(self, extend=""):
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+            'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Referer': 'https://www.youtube.com/'
+        }
+        self.session = requests.Session()
+        self.session.headers.update(self.headers)
+
+        self.hls_cache = {}
+        self.hls_key_seq = 0
+        self.hls_ttl = {
+            'master': 6 * 3600,
+            'playlist': 6 * 3600,
+            'media': 120,
+            'pic': 3600,
+        }
+        self.proxy_health_status = {}
+        self.sorted_proxies = get_base_proxy_candidates()
+        
+        threading.Thread(target=self._check_proxies_async, daemon=True).start()
+
+    def _check_proxies_async(self):
+        try:
+            base_list = get_base_proxy_candidates()
+            latencies = {}
+            with ThreadPoolExecutor(max_workers=20) as executor:
+                future_to_proxy = {
+                    executor.submit(self._test_proxy, proxy): proxy
+                    for proxy in base_list
+                }
+                for future in as_completed(future_to_proxy):
+                    proxy = future_to_proxy[future]
+                    try:
+                        lat = future.result()
+                        if lat is not None:
+                            latencies[proxy] = lat
+                            self.proxy_health_status[proxy] = {'ok': True, 'latency': lat}
+                    except Exception:
+                        pass
+            
+            sorted_by_speed = sorted(base_list, key=lambda p: latencies.get(p, 999.0))
+            if sorted_by_speed:
+                self.sorted_proxies = sorted_by_speed
+        except Exception:
+            pass
+
+    def _test_proxy(self, proxy):
+        try:
+            start = time.time()
+            proxies = get_proxies_dict(proxy)
+            resp = self.session.get('https://www.youtube.com/generate_204', proxies=proxies, timeout=3)
+            if resp.status_code == 204:
+                return time.time() - start
+            return None
+        except Exception:
+            return None
+
+    def iter_proxies_in_order(self):
+        proxies_to_try = self.sorted_proxies if getattr(self, 'sorted_proxies', None) else get_base_proxy_candidates()
+        for p in proxies_to_try:
+            yield p
+
+    def request_with_proxy_fallback(self, method, url, **kwargs):
+        kwargs.setdefault('timeout', 5)
+        headers = kwargs.pop('headers', None) or {}
+        req_headers = self.headers.copy()
+        req_headers.update(headers)
+        kwargs['headers'] = req_headers
+
+        retry_status_codes = {408, 425, 429, 500, 502, 503, 504}
+        last_exception = None
+
+        for proxy in self.iter_proxies_in_order():
+            proxies = get_proxies_dict(proxy)
+            kwargs['proxies'] = proxies
+            try:
+                response = self.session.request(method, url, **kwargs)
+                if response.status_code == 200:
+                    return response, proxy
+                elif response.status_code in retry_status_codes:
+                    continue
+                else:
+                    return response, proxy
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.RequestException) as e:
+                last_exception = e
+                continue
+
+        if last_exception:
+            raise last_exception
+        return None, None
+
+    def _get_current_date_str(self):
+        return datetime.datetime.now().strftime("%Y.%m.%d")
+
+    def _get_promo_items(self):
+        return []
+
+    def get_channel_logo(self, channel_id):
+        return CHANNEL_LOGOS.get(channel_id, "").strip()
+
+    def homeContent(self, filter):
+        classes = [{"type_id": name, "type_name": name} for name in CHANNEL_GROUPS.keys()]
+        result = {
+            "class": classes,
+            "header": {
+                "epg": HEADER_EPG,
+                "background": HEADER_PROMO_BG,
+                "lines": self._get_promo_items()
+            }
+        }
+        return result
+
+    def homeVideoContent(self):
+        promo_list = self._get_promo_items()
+        first_group = list(CHANNEL_GROUPS.keys())[0]
+        category_res = self.categoryContent(first_group, "1", False, {})
+        cat_list = category_res.get("list", [])
+        
+        combined_list = promo_list + cat_list
+        return {
+            "list": combined_list,
+            "page": 1,
+            "pagecount": 1,
+            "limit": len(combined_list),
+            "total": len(combined_list)
+        }
+
+    def categoryContent(self, tid, pg, filter, extend):
+        items = []
+        channels = CHANNEL_GROUPS.get(tid, [])
+        for vid, name in channels:
+            custom_logo = self.get_channel_logo(vid)
+            pic_url = custom_logo if custom_logo else f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+            
+            items.append({
+                "vod_id": vid,
+                "vod_name": name,
+                "vod_pic": self._get_proxy_pic_url(pic_url),
+                "vod_remarks": "LIVE/VOD"
+            })
+        return {"list": items, "page": 1, "pagecount": 1, "limit": len(items), "total": len(items)}
+
+    def detailContent(self, ids):
+        vid = ids[0]
+
+        name = vid
+        for group_channels in CHANNEL_GROUPS.values():
+            for ch_vid, ch_name in group_channels:
+                if ch_vid == vid:
+                    name = ch_name
+                    break
+        
+        custom_logo = self.get_channel_logo(vid)
+        pic_url = custom_logo if custom_logo else f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+
+        return {"list": [{
+            "vod_id": vid,
+            "vod_name": name,
+            "vod_pic": self._get_proxy_pic_url(pic_url),
+            "vod_play_from": "YouTube直播点播",
+            "vod_play_url": f"直播点播线路${vid}@vod"
+        }]}
+
+    def playerContent(self, flag, pid, vipFlags):
+        raw_pid = pid.split('$')[-1]
+        video_id = raw_pid.rsplit('@', 1)[0] if '@' in raw_pid else raw_pid
+
+        if video_id.endswith('.mp4') or video_id.startswith('http://') or video_id.startswith('https://'):
+            return {
+                "parse": 0,
+                "jx": 0,
+                "url": video_id,
+                "header": self.headers,
+                "logo": TV_LOGO_WATERMARK
+            }
+
+        # 核心修复：无论是直播还是点播的直链，全部统一交由本地代理缓存（_cache_hls_url）包装！
+        # 这样播放器请求本地代理，由 Python 爬虫通过最佳代理去拉取外网数据，彻底解决播放器直连外网导致的连接超时！
+        media_url = self._get_video_url_with_proxy(video_id)
+        if media_url:
+            play_url = self._cache_hls_url(media_url, video_id, 'media')
+            is_m3u8 = '.m3u8' in media_url or 'manifest' in media_url or 'hls' in media_url
+            return {
+                "parse": 0,
+                "jx": 0,
+                "url": play_url,
+                "header": self.headers,
+                "format": "application/x-mpegURL" if is_m3u8 else "",
+                "logo": TV_LOGO_WATERMARK
+            }
+
+        return {
+            "parse": 1,
+            "url": f'https://www.youtube.com/watch?v={video_id}',
+            "header": self.headers,
+            "logo": TV_LOGO_WATERMARK
+        }
+
+    def _get_video_url_with_proxy(self, video_id):
+        watch_url = f'https://www.youtube.com/watch?v={video_id}'
+        for proxy in self.iter_proxies_in_order():
+            proxies = get_proxies_dict(proxy)
+            res_url = self._try_player_api_with_single_proxy(video_id, watch_url, proxy, proxies)
+            if res_url:
+                return res_url
+            res_page = self._try_page_extract_with_single_proxy(watch_url, proxies)
+            if res_page:
+                return res_page
+        return ''
+
+    def _try_player_api_with_single_proxy(self, video_id, watch_url, proxy, proxies):
+        try:
+            resp = self.session.get(watch_url, proxies=proxies, timeout=5)
+            if resp.status_code != 200:
+                return ''
+            page = resp.text
+            api_key_match = re.search(r'"INNERTUBE_API_KEY":"([^"]+)"', page)
+            if not api_key_match:
+                return ''
+            api_key = api_key_match.group(1)
+            api_url = f'https://www.youtube.com/youtubei/v1/player?key={api_key}'
+
+            client_configs = [
+                ('web', {'clientName': 'WEB', 'clientVersion': '2.20240310.01.00'}),
+                ('android', {'clientName': 'ANDROID', 'clientVersion': '21.02.35', 'androidSdkVersion': 30}),
+                ('ios', {'clientName': 'IOS', 'clientVersion': '19.29.1'}),
+            ]
+            for _, config in client_configs:
+                try:
+                    payload = {
+                        'context': {'client': config},
+                        'videoId': video_id,
+                        'contentCheckOk': True,
+                        'racyCheckOk': True,
+                    }
+                    api_resp = self.session.post(api_url, json=payload, headers={'Content-Type': 'application/json'}, proxies=proxies, timeout=5)
+                    if api_resp.status_code == 200:
+                        data = api_resp.json()
+                        streaming_data = data.get('streamingData', {})
+                        
+                        # 1. 尝试获取直播 HLS
+                        hls = streaming_data.get('hlsManifestUrl', '')
+                        if hls:
+                            return hls
+                        
+                        # 2. 尝试获取点播视频直链 (formats / adaptiveFormats)
+                        formats = streaming_data.get('formats', []) + streaming_data.get('adaptiveFormats', [])
+                        for fmt in formats:
+                            url = fmt.get('url', '')
+                            if url:
+                                return url
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return ''
+
+    def _try_page_extract_with_single_proxy(self, watch_url, proxies):
+        try:
+            resp = self.session.get(watch_url, proxies=proxies, timeout=5)
+            if resp.status_code == 200:
+                return self._extract_urls_from_page(resp.text)
+        except Exception:
+            pass
+        return ''
+
+    def _extract_urls_from_page(self, page):
+        if not page:
+            return ''
+        match = re.search(r'"hlsManifestUrl"\s*:\s*"(https:[^"]+)"', page)
+        if match:
+            return match.group(1).replace(r'\/', '/')
+        
+        # 匹配点播谷歌视频直链
+        urls = re.findall(r'"url"\s*:\s*"(https://[^"]+?googlevideo\.com[^"]+)"', page)
+        if urls:
+            return urls[0].replace(r'\/', '/')
+            
+        matches = re.findall(r'"(https://[^"]*?\.m3u8[^"]*)"', page)
+        if matches:
+            return matches[0].replace(r'\/', '/')
+        return ''
+
+    def _get_proxy_pic_url(self, original_url):
+        if not original_url:
+            return ""
+        encoded = base64.b64encode(original_url.encode('utf-8')).decode('utf-8')
+        return f'http://127.0.0.1:9978/proxy?do=py&type=pic&url={encoded}'
+
+    def _cache_hls_url(self, target_url, video_id='', kind='media'):
+        self.hls_key_seq += 1
+        key = f'{int(time.time() * 1000)}_{self.hls_key_seq}'
+        self.hls_cache[key] = {
+            'url': target_url,
+            'video_id': video_id,
+            'kind': kind,
+            'expires': time.time() + self.hls_ttl.get(kind, 180)
+        }
+        return f'http://127.0.0.1:9978/proxy?do=py&type=hls&key={quote(key)}'
+
+    def localProxy(self, params):
+        if params.get('do') != 'py':
+            return None
+        if params.get('type') == 'pic':
+            return self._proxy_pic(params)
+        if params.get('type') == 'hls':
+            return self._proxy_hls(params)
+        return None
+
+    def _proxy_pic(self, params):
+        try:
+            encoded_url = params.get('url') or ''
+            try:
+                original_url = base64.b64decode(encoded_url).decode('utf-8')
+            except Exception:
+                return [400, 'text/plain', 'Invalid Base64 URL']
+
+            cache_key = f'pic_{encoded_url[:60]}'
+            if cache_key in self.hls_cache:
+                item = self.hls_cache[cache_key]
+                if item.get('expires', 0) > time.time():
+                    return [200, item.get('content_type', 'image/jpeg'), item.get('content'),
+                            {'Cache-Control': 'public, max-age=3600'}]
+
+            resp, _ = self.request_with_proxy_fallback('GET', original_url, timeout=5)
+            if resp and resp.status_code == 200:
+                content_type = resp.headers.get('content-type', 'image/jpeg')
+                content = resp.content
+                self.hls_cache[cache_key] = {
+                    'content': content,
+                    'content_type': content_type,
+                    'expires': time.time() + self.hls_ttl.get('pic', 3600)
+                }
+                return [200, content_type, content, {'Cache-Control': 'public, max-age=3600'}]
+            return [404, 'text/plain', 'Image load failed']
+        except Exception as e:
+            return [500, 'text/plain', f'Error: {str(e)}']
+
+    def _proxy_hls(self, params):
+        key = params.get('key') or ''
+        item = self.hls_cache.get(key)
+        if not item or item.get('expires', 0) < time.time():
+            return [404, 'text/plain', 'HLS Cache Expired']
+
+        item['expires'] = time.time() + self.hls_ttl.get(item.get('kind'), 180)
+        target_url = item.get('url') or ''
+        try:
+            headers = self._hls_headers(item.get('kind'))
+            # 针对大文件点播流，采用流式传输(stream=True)并延长超时至 10 秒
+            resp, _ = self.request_with_proxy_fallback('GET', target_url, headers=headers, stream=True, timeout=10)
+            if not resp:
+                return [502, 'text/plain', 'HLS proxy failed']
+
+            content_type = resp.headers.get('content-type') or ''
+            is_m3u8 = item.get('kind') in ('master', 'playlist') or 'mpegurl' in content_type.lower() or target_url.endswith('.m3u8')
+            
+            if is_m3u8:
+                text = resp.text
+                rewritten = self._rewrite_m3u8(text, target_url, item.get('video_id') or '')
+                return [resp.status_code, 'application/vnd.apple.mpegurl', rewritten,
+                        {'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache'}]
+            else:
+                return [resp.status_code, content_type or 'application/octet-stream', resp.content,
+                        {'Content-Type': content_type or 'application/octet-stream', 'Cache-Control': 'no-cache'}]
+        except Exception as e:
+            return [500, 'text/plain', f'Error: {str(e)}']
+
+    def _hls_headers(self, kind=None):
+        headers = self.headers.copy()
+        headers['Accept'] = '*/*'
+        if kind in ('master', 'playlist'):
+            headers['Origin'] = 'https://www.youtube.com'
+            headers['Referer'] = 'https://www.youtube.com/'
+        elif kind == 'media':
+            headers['User-Agent'] = 'com.google.android.youtube/21.02.35 (Linux; U; Android 11) gzip'
+            headers.pop('Origin', None)
+            headers.pop('Referer', None)
+        return headers
+
+    def _rewrite_m3u8(self, text, base_url, video_id=''):
+        output = []
+        for line in (text or '').splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                output.append(line)
+                continue
+            absolute = urljoin(base_url, stripped)
+            kind = 'playlist' if stripped.endswith('.m3u8') else 'media'
+            output.append(self._cache_hls_url(absolute, video_id, kind))
+        return '\n'.join(output) + '\n'
